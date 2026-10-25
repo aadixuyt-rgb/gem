@@ -3,7 +3,7 @@
   "id": "gemshop",
   "version": "${version}",
   "name": "Gem Shop",
-  "description": "Gem Shop GUI: lista graczy, ESP, tracer i cooldown.",
+  "description": "Gem Shop GUI: animowana, przeszukiwalna lista graczy na serwerze.",
   "authors": ["you"],
   "license": "MIT",
   "environment": "client",

@@ -26,6 +26,9 @@ import java.util.regex.Pattern;
 /**
  * Gem Shop GUI. Rysowanie w trybie "immediate": uklad w wspolrzednych logicznych panelu
  * (390x290), mapowanych recznie na ekran (bez macierzy - scissor dziala poprawnie).
+ *
+ * Czysto informacyjne GUI listy graczy - bez zadnego sledzenia, "wyciekow" danych
+ * ani funkcji celujacych w konkretnych graczy.
  */
 public class GemShopScreen extends Screen {
     static final int W = 390, H = 290;
@@ -33,7 +36,6 @@ public class GemShopScreen extends Screen {
 
     record Row(UUID id, String name, boolean inRange, double dist, SkinTextures skin) {}
     record Hit(float x0, float y0, float x1, float y1, Runnable run) {}
-    record Leak(String nick, String when, String ip) {}
 
     private final MinecraftClient mc = MinecraftClient.getInstance();
     private final ModConfig cfg = GemShopMod.cfg;
@@ -51,11 +53,8 @@ public class GemShopScreen extends Screen {
     private final float[] scroll = new float[4], maxScroll = new float[4];
     private List<Row> all = new ArrayList<>();
     private KeyBinding listen;
-    private boolean dragging;
-    private int dragDX, dragDY;
     private final List<Hit> hits = new ArrayList<>();
     private float[] clip;
-    private final int salt = new Random().nextInt();
 
     public GemShopScreen() { super(Text.literal("Gem Shop")); }
 
@@ -191,13 +190,6 @@ public class GemShopScreen extends Screen {
         }
     }
 
-    private float chip(String t, float x, float y, int col) {
-        float w = tw(t, 0.65f, true) + 10;
-        rr(x, y, w, 12, 6, Gfx.alpha(col, 0.2f));
-        text(t, x + 5, y + 3.2f, col, 0.65f, true);
-        return w;
-    }
-
     private void head(Row r, float x, float y, float size) {
         int sx = X(x), sy = Y(y), sz = Math.max(4, S(size));
         PlayerSkinDrawer.draw(g, r.skin(), sx, sy, sz);
@@ -258,11 +250,6 @@ public class GemShopScreen extends Screen {
             drawNav();
         }
         if (!shatter) glowBorder();
-
-        if (tab == 1 && mc.player != null) {
-            boolean act = Mark.active();
-            Esp.drawHud(g, mc, act ? Mark.id : mc.player.getUuid(), act ? Mark.name : "Gracz", act ? Mark.remaining() : 45000L, A);
-        }
     }
 
     private void drawShatter() {
@@ -331,14 +318,8 @@ public class GemShopScreen extends Screen {
     private void drawHeader() {
         gem(12, 8, 18, accent);
         text("Gem Shop", 36, 8, th.text, 1f, true);
-        String sub = tab == 0 ? (profileId != null ? "Gracz \u00b7 profil" : "Gracz") : tab == 1 ? "Visuals" : "Ustawienia";
+        String sub = tab == 0 ? (profileId != null ? "Gracz · profil" : "Gracz") : tab == 1 ? "Visuals" : "Ustawienia";
         text(sub, 36, 20, th.sub, 0.72f, false);
-        if (Mark.active()) {
-            String t = "1 cooldown";
-            float w = tw(t, 0.7f, true) + 12, x = W - 34 - w;
-            rr(x, 10, w, 16, 8, Gfx.alpha(accent, 0.2f));
-            text(t, x + 6, 15, accent, 0.7f, true);
-        }
         float cx = W - 30, cy = 8;
         boolean hv = hit(cx, cy, 20, 20, this::close);
         rr(cx, cy, 20, 20, 7, hv ? th.cardHover : th.card);
@@ -379,7 +360,7 @@ public class GemShopScreen extends Screen {
 
     private void openProfile(Row r) { profileId = r.id(); profileName = r.name(); scroll[3] = 0; }
 
-    private String distText(Row r) { return r.inRange() ? Math.round(r.dist()) + " m \u00b7 w zasi\u0119gu" : "nie w zasi\u0119gu"; }
+    private String distText(Row r) { return r.inRange() ? Math.round(r.dist()) + " m · w zasięgu" : "nie w zasięgu"; }
 
     private void drawPlayers() {
         if (profileId != null) { drawProfile(); return; }
@@ -387,7 +368,7 @@ public class GemShopScreen extends Screen {
         rr(12, 42, 300, 20, 8, th.card);
         if (filterFocus) outlineRR(12, 42, 300, 20, 8, accent);
         magnifier(23, 52, th.sub, th.solid);
-        if (filter.isEmpty() && !filterFocus) text("Filtruj graczy w zasi\u0119gu\u2026", 34, 48.2f, th.sub, 0.85f, false);
+        if (filter.isEmpty() && !filterFocus) text("Filtruj graczy w zasięgu…", 34, 48.2f, th.sub, 0.85f, false);
         else {
             String shown = tr.trimToWidth(filter, 230);
             text(shown, 34, 48.2f, th.text, 0.85f, false);
@@ -435,19 +416,11 @@ public class GemShopScreen extends Screen {
         text("Search", bx + 17, by + 5.5f, 0xFFFFFFFF, 0.75f, true);
     }
 
-    private List<Leak> leaksFor(Row r) {
-        if (!r.name().equalsIgnoreCase(Fake.TARGET)) return List.of();
-        List<String> pool = new ArrayList<>();
-        for (Row x : all) if (!x.name().equalsIgnoreCase(Fake.TARGET)) pool.add(x.name());
-        Collections.sort(pool, String.CASE_INSENSITIVE_ORDER);
-        List<Leak> out = new ArrayList<>();
-        for (int i = 0; i < Fake.ROWS.length; i++) {
-            Fake.Entry e = Fake.ROWS[i];
-            String nick = e.nick();
-            if (nick == null) nick = pool.isEmpty() ? "Gracz" + (i + 1) : pool.get(Math.floorMod(salt * 31 + i * 17, pool.size()));
-            out.add(new Leak(nick, e.when(), e.ip()));
-        }
-        return out;
+    /** Ping gracza (ms) z listy TAB, jesli serwer go podaje. -1 = nieznany. */
+    private int pingFor(UUID id) {
+        if (mc.getNetworkHandler() == null) return -1;
+        PlayerListEntry e = mc.getNetworkHandler().getPlayerListEntry(id);
+        return e != null ? e.getLatency() : -1;
     }
 
     private void drawProfile() {
@@ -455,9 +428,9 @@ public class GemShopScreen extends Screen {
         for (Row x : all) if (x.id().equals(profileId)) { r = x; break; }
         if (r == null) r = new Row(profileId, profileName, false, -1, DefaultSkinHelper.getSkinTextures(profileId));
         final Row row = r;
-        List<Leak> leaks = leaksFor(row);
-        float cardH = leaks.isEmpty() ? 28 + 36 : 28 + leaks.size() * 28 + 4;
-        float contentH = 42 + 106 + cardH + 8 - 36;
+        int ping = pingFor(row.id());
+
+        float contentH = 42 + 106 + 56 + 8 - 36;
         float viewH = H - 44 - 36;
         maxScroll[3] = Math.max(0, contentH - viewH);
         scroll[3] = Math.max(0, Math.min(maxScroll[3], scroll[3]));
@@ -466,46 +439,21 @@ public class GemShopScreen extends Screen {
 
         boolean hb = hit(12, top, 60, 18, () -> { profileId = null; scroll[3] = 0; });
         rr(12, top, 60, 18, 7, hb ? th.cardHover : th.card);
-        text("\u2039 Gracze", 20, top + 5.5f, th.text, 0.8f, true);
+        text("‹ Gracze", 20, top + 5.5f, th.text, 0.8f, true);
 
         head(row, W / 2f - 20, top + 26, 40);
         ctext(row.name(), W / 2f, top + 70, th.text, 1.15f, true);
-        String sub = distText(row);
-        boolean cd = Mark.active();
-        String tm = Mark.fmt(Mark.remaining());
-        float sw_ = tw(sub, 0.78f, false), chipW = cd ? tw(tm, 0.65f, true) + 10 : 0;
-        float sx = W / 2f - (sw_ + (cd ? chipW + 6 : 0)) / 2f;
-        text(sub, sx, top + 86, th.sub, 0.78f, false);
-        if (cd) chip(tm, sx + sw_ + 6, top + 84, 0xFFFF4D5E);
+        text(distText(row), W / 2f - tw(distText(row), 0.78f, false) / 2f, top + 86, th.sub, 0.78f, false);
 
         float cy = top + 106;
-        card(12, cy, W - 24, cardH);
-        text("Historia nick\u00f3w i powi\u0105za\u0144", 22, cy + 9, th.text, 0.85f, true);
-        float tx = 22 + tw("Historia nick\u00f3w i powi\u0105za\u0144", 0.85f, true) + 6;
-        if (cd) chip(tm, tx, cy + 7, 0xFFFF4D5E);
-        String res = leaks.size() + (leaks.size() == 1 ? " wynik" : leaks.size() >= 2 && leaks.size() <= 4 ? " wyniki" : " wynik\u00f3w");
-        text(res, W - 22 - tw(res, 0.7f, false), cy + 10, th.sub, 0.7f, false);
-
-        if (leaks.isEmpty()) {
-            ctext("Brak wyciek\u00f3w", W / 2f, cy + 28 + 12, th.sub, 0.95f, true);
-        } else {
-            for (int k = 0; k < leaks.size(); k++) {
-                Leak lk = leaks.get(k);
-                float ry = cy + 28 + k * 28;
-                if (k > 0) fill(22, ry - 1, W - 44, 1, th.border);
-                text(tr.trimToWidth(lk.nick(), 90), 22, ry + 9, th.text, 0.85f, true);
-                text(lk.when(), 120, ry + 9.5f, th.sub, 0.7f, false);
-                text("(" + lk.ip() + ")", 178, ry + 9, 0xFFFF6B7A, 0.8f, false);
-                float bw = cd ? 74 : 54, bx = W - 22 - bw, by = ry + 4;
-                boolean hv = hit(bx, by, bw, 18, cd ? null : () -> Mark.start(row.id(), row.name()));
-                int col = cd ? th.track : hv ? 0xFFFF7A5C : 0xFFFF5A3C;
-                rr(bx, by, bw, 18, 6, col);
-                int fg = cd ? th.sub : 0xFFFFFFFF;
-                circle(bx + 10, by + 10.5f, 3, fg);
-                line(bx + 11.5f, by + 7.5f, bx + 13.5f, by + 5, 1.1f, fg);
-                text(cd ? "Bomba (" + tm + ")" : "Bomba", bx + 17, by + 5.5f, fg, 0.75f, true);
-            }
-        }
+        card(12, cy, W - 24, 56);
+        text("Status", 22, cy + 9, th.text, 0.85f, true);
+        boolean online = row.inRange() || all.stream().anyMatch(x -> x.id().equals(row.id()));
+        circle(26, cy + 29, 3, online ? 0xFF34D399 : 0xFF8B8E9C);
+        text(online ? "Na serwerze" : "Poza serwerem", 32, cy + 25.5f, th.text, 0.8f, false);
+        String pingText = ping >= 0 ? ping + " ms ping" : "Ping nieznany";
+        text(pingText, W - 22 - tw(pingText, 0.75f, false), cy + 26, th.sub, 0.75f, false);
+        text("Gra kliencka tylko odczytuje publiczna liste graczy serwera.", 22, cy + 40, th.sub, 0.6f, false);
         endScissor();
     }
 
@@ -513,8 +461,7 @@ public class GemShopScreen extends Screen {
 
     private void drawVisuals() {
         float top = 42 - scroll[1];
-        maxScroll[1] = 42;
-        scroll[1] = Math.max(0, Math.min(maxScroll[1], scroll[1]));
+        maxScroll[1] = 0;
         scissor(0, 36, W, H - 44);
         float lx = 12, rx = 199, cw = 179, y = top;
 
@@ -549,50 +496,22 @@ public class GemShopScreen extends Screen {
         text("Zamykanie", lx + 10, y + 11.5f, th.text, 0.8f, true);
         seg(lx + cw - 10 - 84, y + 8, new String[]{"Rozpad", "Fade"}, cfg.closeFade ? 1 : 0, 40, i -> { cfg.closeFade = i == 1; cfg.save(); });
 
-        y += 38;
-        card(lx, y, cw, 28);
-        text("ESP graczy", lx + 10, y + 10, th.text, 0.8f, true);
-        toggle(lx + cw - 36, y + 7, cfg.esp, () -> { cfg.esp = !cfg.esp; cfg.save(); });
-
-        y += 34;
-        card(lx, y, cw, 28);
-        text("Tracer do celu", lx + 10, y + 10, th.text, 0.8f, true);
-        toggle(lx + cw - 36, y + 7, cfg.tracer, () -> { cfg.tracer = !cfg.tracer; cfg.save(); });
-
         // prawa kolumna
         y = top;
         card(rx, y, cw, 148);
-        title("Powiadomienie cooldown", rx, y);
-        float px = rx + 10, py = y + 24;
-        rr(px, py, 78, 50, 6, th.track);
-        float[][] cells = {{px + 4, py + 4}, {px + 78 - 30, py + 4}, {px + 4, py + 50 - 18}, {px + 78 - 30, py + 50 - 18}};
-        for (int i = 0; i < 4; i++) {
-            final int ii = i;
-            hit(cells[i][0], cells[i][1], 26, 14, () -> { cfg.hudCorner = ii; cfg.hudManual = false; cfg.save(); });
-            rr(cells[i][0], cells[i][1], 26, 14, 4, (cfg.hudCorner == i && !cfg.hudManual) ? accent : Gfx.alpha(th.sub, 0.3f));
-        }
-        List<OrderedText> lines = tr.wrapLines(Text.literal("Wybierz r\u00f3g albo w\u0142\u0105cz r\u0119czne przesuwanie i przeci\u0105gnij powiadomienie myszk\u0105."), (int) (75 / 0.65f));
+        title("O modzie", rx, y);
+        List<OrderedText> lines = tr.wrapLines(Text.literal(
+                "Gem Shop pokazuje liste graczy na serwerze i ich dystans. Nie zbiera ani nie wyswietla zadnych danych o graczach poza tym, co podaje sama gra."),
+                (int) ((cw - 20) / 0.65f));
         for (int i = 0; i < lines.size(); i++)
-            Gfx.textOrdered(g, tr, lines.get(i), X(rx + 96), Y(y + 24 + i * 7.2f), c(th.sub), 0.65f * s);
-
-        text("Przesu\u0144 r\u0119cznie", rx + 10, y + 88, th.text, 0.8f, true);
-        toggle(rx + cw - 36, y + 84, cfg.hudManual, () -> {
-            if (!cfg.hudManual) { int[] rc = Esp.hudRect(); cfg.hudX = rc[0]; cfg.hudY = rc[1]; }
-            cfg.hudManual = !cfg.hudManual; cfg.save();
-        });
-        text("Styl", rx + 10, y + 111, th.text, 0.8f, true);
-        seg(rx + cw - 10 - 76, y + 106, new String[]{"Pe\u0142ny", "Kompakt"}, cfg.hudCompact ? 1 : 0, 36, i -> { cfg.hudCompact = i == 1; cfg.save(); });
-        text("Pozycja", rx + 10, y + 132, th.text, 0.8f, true);
-        int[] rc = Esp.hudRect();
-        String pos = "x " + rc[0] + " \u00b7 y " + rc[1];
-        text(pos, rx + cw - 10 - tw(pos, 0.75f, false), y + 132.5f, th.sub, 0.75f, false);
+            Gfx.textOrdered(g, tr, lines.get(i), X(rx + 10), Y(y + 26 + i * 8.5f), c(th.sub), 0.65f * s);
         endScissor();
     }
 
     // ------------------------------------------------------------------ zakladka: Ustawienia
 
     private String keyName(KeyBinding kb) {
-        if (listen == kb) return "\u2026";
+        if (listen == kb) return "…";
         String n = kb.getBoundKeyLocalizedText().getString();
         return n.length() == 1 ? n.toUpperCase(Locale.ROOT) : n;
     }
@@ -604,7 +523,7 @@ public class GemShopScreen extends Screen {
         float cw = 179;
         card(12, top, cw, 64);
         text("Licencja", 22, top + 9, th.sub, 0.7f, false);
-        text("W\u0142a\u015bciciel", 22, top + 19, th.text, 1.5f, true);
+        text("Właściciel", 22, top + 19, th.text, 1.5f, true);
         rr(22, top + 44, cw - 20, 3, 1.5f, th.track);
         rr(22, top + 44, cw - 20, 3, 1.5f, accent);
         text("Czas: na zawsze", 22, top + 52, th.sub, 0.65f, false);
@@ -612,14 +531,14 @@ public class GemShopScreen extends Screen {
         card(199, top, cw, 64);
         text("Status API", 209, top + 9, th.sub, 0.7f, false);
         circle(212.5f, top + 25, 2.5f, 0xFF34D399);
-        text("Po\u0142\u0105czono", 219, top + 21, th.text, 0.9f, true);
-        List<OrderedText> lines = tr.wrapLines(Text.literal("Dane konta i licencji przyjd\u0105 z API po autoryzacji przez Discord."), (int) ((cw - 20) / 0.65f));
+        text("Połączono", 219, top + 21, th.text, 0.9f, true);
+        List<OrderedText> lines = tr.wrapLines(Text.literal("Dane konta i licencji przyjdą z API po autoryzacji przez Discord."), (int) ((cw - 20) / 0.65f));
         for (int i = 0; i < lines.size(); i++)
             Gfx.textOrdered(g, tr, lines.get(i), X(209), Y(top + 34 + i * 7.2f), c(th.sub), 0.65f * s);
 
         float cy = top + 72;
         card(12, cy, W - 24, 130);
-        String[] labels = {"Klawisz otwierania", "Szybkie szukanie (celownik)", "Animacje otwierania i zamykania", "Ruch 3D i b\u0142ysk za myszk\u0105", "Rozmycie t\u0142a (shader)"};
+        String[] labels = {"Klawisz otwierania", "Szybkie szukanie (celownik)", "Animacje otwierania i zamykania", "Ruch 3D i błysk za myszką", "Rozmycie tła (shader)"};
         for (int i = 0; i < 5; i++) {
             float ry = cy + i * 26;
             if (i > 0) fill(22, ry, W - 44, 1, th.border);
@@ -660,13 +579,6 @@ public class GemShopScreen extends Screen {
     public boolean mouseClicked(double mx, double my, int button) {
         if (closeStart >= 0) return true;
         if (button != 0) return super.mouseClicked(mx, my, button);
-        if (cfg.hudManual && tab == 1) {
-            int[] r = Esp.hudRect();
-            if (mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3]) {
-                dragging = true; dragDX = (int) mx - r[0]; dragDY = (int) my - r[1];
-                return true;
-            }
-        }
         updateMouse(mx, my);
         filterFocus = false;
         listen = null;
@@ -675,23 +587,6 @@ public class GemShopScreen extends Screen {
             if (lmx >= h.x0() && lmx < h.x1() && lmy >= h.y0() && lmy < h.y1()) { h.run().run(); return true; }
         }
         return true;
-    }
-
-    @Override
-    public boolean mouseDragged(double mx, double my, int button, double dx, double dy) {
-        if (dragging) {
-            int[] r = Esp.hudRect();
-            cfg.hudX = (int) Math.max(0, Math.min(width - r[2], mx - dragDX));
-            cfg.hudY = (int) Math.max(0, Math.min(height - r[3], my - dragDY));
-            return true;
-        }
-        return super.mouseDragged(mx, my, button, dx, dy);
-    }
-
-    @Override
-    public boolean mouseReleased(double mx, double my, int button) {
-        if (dragging) { dragging = false; cfg.save(); return true; }
-        return super.mouseReleased(mx, my, button);
     }
 
     @Override
