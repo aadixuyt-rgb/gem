@@ -2,9 +2,10 @@ package pl.gemshop;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.RaycastContext;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.RaycastContext;
 
 import java.util.Optional;
 
@@ -26,7 +27,7 @@ public final class Target {
         Vec3d end = start.add(dir.multiply(RANGE));
 
         // najpierw sprawdz czy na drodze jest blok - jesli tak, nie "widzimy" nic za nim
-        HitResult blockHit = mc.world.raycast(new RaycastContext(start, end,
+        BlockHitResult blockHit = mc.world.raycast(new RaycastContext(start, end,
                 RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, mc.player));
         double maxDist = blockHit != null && blockHit.getType() != HitResult.Type.MISS
                 ? start.distanceTo(blockHit.getPos()) : RANGE;
